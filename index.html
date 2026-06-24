@@ -90,8 +90,13 @@
         let peerConnection;
         let dataChannel;
         
-        // standard configuration for P2P connections without internet routing
-        const rtcConfig = { iceServers: [] }; 
+        // ADDED PUBLIC STUN SERVERS: This allows browsers to discover their actual network paths
+        const rtcConfig = { 
+            iceServers: [
+                { urls: "stun:stun.l.google.com:19302" },
+                { urls: "stun:stun1.l.google.com:19302" }
+            ] 
+        }; 
 
         // --- Step 1: Start as Host (Computer 1) ---
         async function startAsHost() {
@@ -104,19 +109,32 @@
             const offer = await peerConnection.createOffer();
             await peerConnection.setLocalDescription(offer);
 
-            // Wait brief moment for browser to assemble connection package
+            // Listen for ICE candidates to finish gathering before generating the key
+            peerConnection.onicegatheringstatechange = () => {
+                if (peerConnection.iceGatheringState === "complete") {
+                    generateHostKey();
+                }
+            };
+
+            // Fallback in case gathering takes too long or triggers instantly
             setTimeout(() => {
-                const encodedKey = btoa(JSON.stringify({ offer: peerConnection.localDescription, user: localUser }));
-                
-                document.getElementById('handshake-area').classList.remove('hidden');
-                document.getElementById('handshake-instruction').innerText = "STEP A: Copy this Key and paste it into Computer 2:";
-                const output = document.getElementById('handshake-output');
-                output.value = encodedKey;
-                
-                const btn = document.getElementById('handshake-action-btn');
-                btn.innerText = "Copy to Clipboard";
-                btn.onclick = () => { output.select(); document.execCommand('copy'); alert('Key Copied!'); transformToFinalStepHost(); };
-            }, 500);
+                if (peerConnection.iceGatheringState !== "complete") {
+                    generateHostKey();
+                }
+            }, 1500);
+        }
+
+        function generateHostKey() {
+            const encodedKey = btoa(JSON.stringify({ offer: peerConnection.localDescription, user: localUser }));
+            
+            document.getElementById('handshake-area').classList.remove('hidden');
+            document.getElementById('handshake-instruction').innerText = "STEP A: Copy this Key and paste it into Computer 2:";
+            const output = document.getElementById('handshake-output');
+            output.value = encodedKey;
+            
+            const btn = document.getElementById('handshake-action-btn');
+            btn.innerText = "Copy to Clipboard";
+            btn.onclick = () => { output.select(); document.execCommand('copy'); alert('Key Copied!'); transformToFinalStepHost(); };
         }
 
         function transformToFinalStepHost() {
@@ -155,30 +173,46 @@
                 const answer = await peerConnection.createAnswer();
                 await peerConnection.setLocalDescription(answer);
 
+                // Wait for ICE candidates on Joiner side too
+                peerConnection.onicegatheringstatechange = () => {
+                    if (peerConnection.iceGatheringState === "complete") {
+                        generateJoinerKey();
+                    }
+                };
+
                 setTimeout(() => {
-                    const returnKey = btoa(JSON.stringify({ answer: peerConnection.localDescription, user: localUser }));
-                    document.getElementById('handshake-area').classList.remove('hidden');
-                    document.getElementById('handshake-instruction').innerText = "Success! Copy this Return Key back to Computer 1:";
-                    const output = document.getElementById('handshake-output');
-                    output.value = returnKey;
-                    
-                    const btn = document.getElementById('handshake-action-btn');
-                    btn.innerText = "Copy Return Key & Open Chat";
-                    btn.onclick = () => {
-                        output.select();
-                        document.execCommand('copy');
-                        document.getElementById('setup-screen').classList.add('hidden');
-                    };
-                }, 500);
+                    if (peerConnection.iceGatheringState !== "complete") {
+                        generateJoinerKey();
+                    }
+                }, 1500);
 
             } catch(e) { alert("Invalid initialization key code."); }
+        }
+
+        function generateJoinerKey() {
+            const returnKey = btoa(JSON.stringify({ answer: peerConnection.localDescription, user: localUser }));
+            document.getElementById('handshake-area').classList.remove('hidden');
+            document.getElementById('handshake-instruction').innerText = "Success! Copy this Return Key back to Computer 1:";
+            const output = document.getElementById('handshake-output');
+            output.value = returnKey;
+            
+            const btn = document.getElementById('handshake-action-btn');
+            btn.innerText = "Copy Return Key & Open Chat";
+            btn.onclick = () => {
+                output.select();
+                document.execCommand('copy');
+                document.getElementById('setup-screen').classList.add('hidden');
+            };
         }
 
         // --- Core RTC Setup ---
         function setupRTC() {
             peerConnection = new RTCPeerConnection(rtcConfig);
 
-            // Handle incoming data channel on the joiner side
+            peerConnection.onicecandidate = (event) => {
+                // Candidates are gathered in the background
+            };
+
             peerConnection.ondatachannel = (event) => {
                 dataChannel = event.channel;
                 setupDataChannelHandlers();
